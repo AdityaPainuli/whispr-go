@@ -3,6 +3,7 @@ package audio
 import (
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/gen2brain/malgo"
 )
@@ -20,6 +21,10 @@ type malgoCapture struct {
 	ctx *malgo.AllocatedContext
 	dev *malgo.Device
 	ch  chan []int16
+	// drops counts callback buffers thrown away because the channel was
+	// full — the feeder couldn't keep up. Nonzero drops = missing audio =
+	// garbled transcripts. Prime suspect under memory pressure.
+	drops atomic.Int64
 }
 
 // New initializes the audio backend (CoreAudio on macOS). Once per app
@@ -27,6 +32,16 @@ func New() (Capture, error) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("audio: init context: %w", err)
+	}
+	// Say which mic we're on: Bluetooth mics (AirPods) drop to a low-quality
+	// codec while capturing and transcription craters — first thing to check
+	// when a transcript comes back garbled.
+	if infos, err := ctx.Devices(malgo.Capture); err == nil {
+		for _, info := range infos {
+			if info.IsDefault != 0 {
+				fmt.Printf("[audio] capture device: %s\n", info.Name())
+			}
+		}
 	}
 	return &malgoCapture{ctx: ctx}, nil
 }
@@ -36,7 +51,11 @@ func (c *malgoCapture) Start() (<-chan []int16, error) {
 		return nil, fmt.Errorf("audio: already capturing")
 	}
 
-	c.ch = make(chan []int16, 16)
+	// 1024 slots ≈ 10s of audio (~320KB). Measured: memory pressure can
+	// slow ASR decode 17x; with a 16-slot buffer that meant dropped mic
+	// frames = corrupted words. A big buffer converts overload into a
+	// delayed paste instead of a wrong one.
+	c.ch = make(chan []int16, 1024)
 
 	cfg := malgo.DefaultDeviceConfig(malgo.Capture)
 	cfg.Capture.Format = malgo.FormatS16
@@ -52,6 +71,7 @@ func (c *malgoCapture) Start() (<-chan []int16, error) {
 		select {
 		case c.ch <- samples:
 		default:
+			c.drops.Add(1)
 		}
 	}
 	dev, err := malgo.InitDevice(c.ctx.Context, cfg, malgo.DeviceCallbacks{Data: onData})
@@ -79,6 +99,9 @@ func (c *malgoCapture) Stop() error {
 	c.dev.Uninit()
 	c.dev = nil
 	close(c.ch)
+	if n := c.drops.Swap(0); n > 0 {
+		fmt.Printf("[audio] WARNING: dropped %d buffers (~%dms of speech) — feeder too slow\n", n, n*10)
+	}
 	return nil
 }
 

@@ -43,7 +43,9 @@ func main() {
 	fmt.Println("Enter = start/stop dictation, Ctrl+C = quit")
 	in := bufio.NewReader(os.Stdin)
 	for {
-		in.ReadString('\n')
+		if _, err := in.ReadString('\n'); err != nil {
+			return // stdin closed (EOF): exit instead of spinning
+		}
 		if ctl.State() == session.Listening {
 			stopped = time.Now()
 		}

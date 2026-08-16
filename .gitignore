@@ -1,5 +1,6 @@
 # big binary deps, see README for download steps
 third_party/sherpa/lib/
+third_party/llama/
 models/
 
 # build artifacts

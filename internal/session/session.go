@@ -1,11 +1,14 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"whiper-go/internal/audio"
 	"whiper-go/internal/engine"
+	"whiper-go/internal/refine"
 )
 
 type State int
@@ -34,10 +37,17 @@ type Controller struct {
 	// can't see it by polling State() after Toggle returns.
 	OnState func(State)
 
+	// Refiner, if set, cleans the flushed text before pasting. It runs
+	// under RefineTimeout; on timeout or error the RAW text is pasted.
+	// The refiner can improve a dictation, never delay or lose one.
+	Refiner       refine.Refiner
+	RefineTimeout time.Duration
+
 	mu     sync.Mutex
 	state  State
 	stream engine.Stream
 	done   chan struct{} // closed by the feeder when the audio channel drains
+	peak   int16         // loudest sample this dictation; written by feed, read after <-done
 }
 
 func New(eng engine.Engine, mic audio.Capture, paste func(string) error) *Controller {
@@ -102,6 +112,11 @@ func (c *Controller) feed(stream engine.Stream, ch <-chan []int16, done chan str
 	defer close(done)
 	last := ""
 	for samples := range ch {
+		for _, s := range samples {
+			if s > c.peak {
+				c.peak = s
+			}
+		}
 		if err := stream.Feed(samples); err != nil {
 			c.report(fmt.Errorf("session: feed: %w", err))
 			continue
@@ -125,10 +140,21 @@ func (c *Controller) finish() {
 	if err != nil {
 		c.report(fmt.Errorf("session: flush: %w", err))
 	} else if text != "" {
-		if err := c.paste(text); err != nil {
+		if err := c.paste(c.refined(text)); err != nil {
 			c.report(fmt.Errorf("session: paste: %w", err))
 		}
+	} else {
+		// Empty transcript must never be silent — it's the signature of a
+		// mic permission problem (macOS hands muted-permission apps pure
+		// zeros instead of failing) or a muted/too-quiet input.
+		if c.peak < 500 {
+			c.report(fmt.Errorf("session: heard only silence (peak %d) — likely missing "+
+				"microphone permission for this terminal, or input muted", c.peak))
+		} else {
+			c.report(fmt.Errorf("session: audio present (peak %d) but no words recognized", c.peak))
+		}
 	}
+	c.peak = 0
 
 	c.stream.Close()
 
@@ -150,4 +176,32 @@ func (c *Controller) notify(s State) {
 	if c.OnState != nil {
 		c.OnState(s)
 	}
+}
+
+// refined runs the optional cleanup pass with a hard deadline. Fallback is
+// always the raw transcript — a refine failure costs polish, not the text.
+func (c *Controller) refined(text string) string {
+	if c.Refiner == nil {
+		return text
+	}
+	timeout := c.RefineTimeout
+	if timeout <= 0 {
+		// Output length tracks input length (editor contract), so the
+		// budget scales with the dictation: ~430ms for a sentence,
+		// capped at 2.5s for long rambles. Measured on M2: 30 words
+		// ≈ 430ms, 60 words ≈ 1.2s.
+		timeout = 600*time.Millisecond + time.Duration(len(text))*4*time.Millisecond
+		if timeout > 2500*time.Millisecond {
+			timeout = 2500 * time.Millisecond
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cleaned, err := c.Refiner.Refine(ctx, text)
+	if err != nil {
+		c.report(fmt.Errorf("session: refine (pasting raw): %w", err))
+		return text
+	}
+	return cleaned
 }

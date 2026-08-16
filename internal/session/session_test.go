@@ -119,6 +119,73 @@ func TestMicFailureReturnsToIdle(t *testing.T) {
 	}
 }
 
+type fakeRefiner struct {
+	delay time.Duration
+	out   string
+	err   error
+}
+
+func (r *fakeRefiner) Refine(ctx context.Context, text string) (string, error) {
+	select {
+	case <-time.After(r.delay):
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.out, nil
+}
+
+func TestRefinerCleansText(t *testing.T) {
+	eng := &fakeEngine{}
+	mic := &fakeCapture{}
+	var pasted string
+	ctl := New(eng, mic, func(s string) error { pasted = s; return nil })
+	ctl.Refiner = &fakeRefiner{out: "Hello, world."}
+
+	ctl.Toggle()
+	ctl.Toggle()
+	if pasted != "Hello, world." {
+		t.Fatalf("pasted = %q, want refined text", pasted)
+	}
+}
+
+func TestSlowRefinerFallsBackToRaw(t *testing.T) {
+	eng := &fakeEngine{}
+	mic := &fakeCapture{}
+	var pasted string
+	ctl := New(eng, mic, func(s string) error { pasted = s; return nil })
+	ctl.Refiner = &fakeRefiner{delay: time.Second, out: "too late"}
+	ctl.RefineTimeout = 20 * time.Millisecond
+
+	var refineErr error
+	ctl.OnError = func(err error) { refineErr = err }
+
+	ctl.Toggle()
+	ctl.Toggle()
+	if pasted != "hello world" { // the fake stream's raw flush text
+		t.Fatalf("pasted = %q, want raw fallback", pasted)
+	}
+	if refineErr == nil {
+		t.Fatal("timeout should have been reported via OnError")
+	}
+}
+
+func TestFailingRefinerFallsBackToRaw(t *testing.T) {
+	eng := &fakeEngine{}
+	mic := &fakeCapture{}
+	var pasted string
+	ctl := New(eng, mic, func(s string) error { pasted = s; return nil })
+	ctl.Refiner = &fakeRefiner{err: errors.New("model exploded")}
+
+	ctl.Toggle()
+	ctl.Toggle()
+	if pasted != "hello world" {
+		t.Fatalf("pasted = %q, want raw fallback", pasted)
+	}
+}
+
 func TestPartialCallback(t *testing.T) {
 	eng := &fakeEngine{}
 	mic := &fakeCapture{}
