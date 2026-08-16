@@ -29,6 +29,10 @@ type Controller struct {
 	OnPartial func(string)
 	// OnError, if set, receives failures that sent us back to Idle.
 	OnError func(error)
+	// OnState, if set, fires on every state transition. Needed because
+	// Flushing → Idle happens asynchronously after finish() — observers
+	// can't see it by polling State() after Toggle returns.
+	OnState func(State)
 
 	mu     sync.Mutex
 	state  State
@@ -63,6 +67,7 @@ func (c *Controller) Toggle() {
 		// mid-flush hits the Flushing case below and bounces off.
 		c.state = Flushing
 		c.mu.Unlock()
+		c.notify(Flushing)
 		c.finish()
 	case Flushing:
 		c.mu.Unlock()
@@ -87,6 +92,7 @@ func (c *Controller) startLocked() error {
 	c.state = Listening
 
 	go c.feed(stream, ch, c.done)
+	c.notify(Listening)
 	return nil
 }
 
@@ -131,10 +137,17 @@ func (c *Controller) finish() {
 	c.done = nil
 	c.state = Idle
 	c.mu.Unlock()
+	c.notify(Idle)
 }
 
 func (c *Controller) report(err error) {
 	if c.OnError != nil {
 		c.OnError(err)
+	}
+}
+
+func (c *Controller) notify(s State) {
+	if c.OnState != nil {
+		c.OnState(s)
 	}
 }

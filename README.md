@@ -38,8 +38,11 @@ No temp files, no IPC, no sidecar processes. Audio goes from the OS callback str
 - [x] Engine binding: streaming decode, partials, truncation-safe flush
 - [x] Mic capture
 - [x] Session state machine + tests
-- [ ] Global hotkey + paste at cursor (macOS CGEvent)
-- [ ] Menu bar app
+- [x] Global hotkey: tap Option anywhere (CGEventTap, combos pass through untouched)
+- [x] Paste at cursor: clipboard + synthetic Cmd+V, old clipboard restored
+- [x] Menu bar app: 🎙 idle, 🔴 listening, ✍️ flushing
+- [ ] Cleanup layer (punctuation/disfluencies) under the latency budget
+- [ ] .app bundle + codesign
 - [ ] Model downloader, settings, Windows/Linux
 
 macOS (Apple Silicon) first. The core is platform-agnostic Go, platform adapters come later.
@@ -66,10 +69,10 @@ mv sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25 models/ne
 codesign --force -s - third_party/sherpa/lib/*.dylib
 
 # talk to it
-go run ./cmd/mictest
+go run ./cmd/app
 ```
 
-First run pops the macOS mic permission dialog for your terminal.
+Tap Option anywhere to start/stop. First run needs two grants for your terminal: microphone (auto-prompted) and Accessibility (System Settings → Privacy & Security → Accessibility) for the hotkey tap + paste. `cmd/mictest` still works for terminal-only testing without permissions.
 
 ## Tests
 
