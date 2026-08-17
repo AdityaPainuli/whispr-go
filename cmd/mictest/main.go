@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"whiper-go/internal/audio"
-	"whiper-go/internal/engine"
-	"whiper-go/internal/session"
+	"github.com/AdityaPainuli/whispr-go/internal/audio"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
+	"github.com/AdityaPainuli/whispr-go/internal/session"
 )
 
 func main() {

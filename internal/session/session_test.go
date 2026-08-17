@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"whiper-go/internal/engine"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
 )
 
 // --- fakes: prove the state machine without mic or model ---

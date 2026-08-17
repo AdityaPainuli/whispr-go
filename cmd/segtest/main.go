@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"whiper-go/internal/engine"
-	"whiper-go/internal/refine"
-	"whiper-go/internal/session"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
+	"github.com/AdityaPainuli/whispr-go/internal/refine"
+	"github.com/AdityaPainuli/whispr-go/internal/session"
 
 	"golang.org/x/sys/unix"
 )

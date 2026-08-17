@@ -3,7 +3,7 @@ package tray
 import (
 	"fyne.io/systray"
 
-	"whiper-go/internal/session"
+	"github.com/AdityaPainuli/whispr-go/internal/session"
 )
 
 // Run owns the menu bar item. Must be called from the main goroutine and

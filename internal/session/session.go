@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"whiper-go/internal/audio"
-	"whiper-go/internal/engine"
-	"whiper-go/internal/refine"
+	"github.com/AdityaPainuli/whispr-go/internal/audio"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
+	"github.com/AdityaPainuli/whispr-go/internal/refine"
 )
 
 type State int

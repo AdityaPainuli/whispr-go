@@ -1,4 +1,4 @@
-module whiper-go
+module github.com/AdityaPainuli/whispr-go
 
 go 1.26.5
 

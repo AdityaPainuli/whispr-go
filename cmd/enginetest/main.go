@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"time"
-	"whiper-go/internal/engine"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
 )
 
 const chunkSamples = 8960

@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 
-	"whiper-go/internal/audio"
-	"whiper-go/internal/engine"
-	"whiper-go/internal/hotkey"
-	"whiper-go/internal/output"
-	"whiper-go/internal/refine"
-	"whiper-go/internal/session"
-	"whiper-go/internal/tray"
+	"github.com/AdityaPainuli/whispr-go/internal/audio"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
+	"github.com/AdityaPainuli/whispr-go/internal/hotkey"
+	"github.com/AdityaPainuli/whispr-go/internal/output"
+	"github.com/AdityaPainuli/whispr-go/internal/refine"
+	"github.com/AdityaPainuli/whispr-go/internal/session"
+	"github.com/AdityaPainuli/whispr-go/internal/tray"
 
 	"golang.org/x/sys/unix"
 )

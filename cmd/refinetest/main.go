@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"whiper-go/internal/refine"
+	"github.com/AdityaPainuli/whispr-go/internal/refine"
 )
 
 func main() {
