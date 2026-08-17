@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -104,6 +105,7 @@ type LlamaServer struct {
 	binPath   string
 	modelPath string
 	port      int
+	mu        sync.Mutex    // guards cmd/exited: Start runs in a goroutine, Stop from quit
 	cmd       *exec.Cmd
 	exited    chan struct{} // closed when the subprocess is reaped
 	client    *http.Client
@@ -152,7 +154,9 @@ func (l *LlamaServer) Start() error {
 	)
 	l.cmd.Stdout = os.Stderr
 	l.cmd.Stderr = os.Stderr
+	l.mu.Lock()
 	if err := l.cmd.Start(); err != nil {
+		l.mu.Unlock()
 		return fmt.Errorf("refine: start llama-server: %w", err)
 	}
 	writePidFile(l.cmd.Process.Pid)
@@ -161,14 +165,15 @@ func (l *LlamaServer) Start() error {
 	// tell "still loading the model" from "exited on a port/model error"
 	// instead of happily polling whatever else answers on the port.
 	l.exited = make(chan struct{})
-	cmd := l.cmd
-	go func() { cmd.Wait(); close(l.exited) }()
+	cmd, exited := l.cmd, l.exited
+	go func() { cmd.Wait(); close(exited) }()
+	l.mu.Unlock()
 
 	// Model load takes a few seconds; poll health until ready.
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
-		case <-l.exited:
+		case <-exited:
 			l.cleanup()
 			return fmt.Errorf("refine: llama-server exited during startup (port in use, or bad model path?)")
 		default:
@@ -209,17 +214,22 @@ func (l *LlamaServer) warmup() error {
 }
 
 func (l *LlamaServer) Stop() {
-	if l.cmd != nil && l.cmd.Process != nil {
-		l.cmd.Process.Kill()
-		if l.exited != nil {
-			<-l.exited // the Wait goroutine reaps it
+	l.mu.Lock()
+	cmd, exited := l.cmd, l.exited
+	l.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		cmd.Process.Kill()
+		if exited != nil {
+			<-exited // the Wait goroutine reaps it
 		}
 	}
 	l.cleanup()
 }
 
 func (l *LlamaServer) cleanup() {
+	l.mu.Lock()
 	l.cmd = nil
+	l.mu.Unlock()
 	os.Remove(pidFilePath())
 }
 

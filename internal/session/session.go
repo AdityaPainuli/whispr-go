@@ -77,6 +77,22 @@ func (c *Controller) State() State {
 	return c.state
 }
 
+// SetRefiner installs (or clears) the cleanup pass. Safe to call while a
+// dictation is running — the LLM starts in the background at launch and
+// attaches whenever it becomes healthy; dictations before that paste raw.
+func (c *Controller) SetRefiner(r refine.Refiner, corrections bool) {
+	c.mu.Lock()
+	c.Refiner = r
+	c.Corrections = corrections
+	c.mu.Unlock()
+}
+
+func (c *Controller) refiner() (refine.Refiner, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Refiner, c.Corrections
+}
+
 // Toggle is the only public action. Safe to call from any goroutine,
 // including a jittery hotkey thread firing twice in a row.
 func (c *Controller) Toggle() {
@@ -202,9 +218,9 @@ func (c *Controller) finish() {
 	// able to apply it, so the refined text looks innocent. Corrections
 	// are rare, so most dictations skip this. On merge failure keep the
 	// per-segment refined text — polish survives, the correction doesn't.
-	if c.Corrections && len(segs) > 1 && c.Refiner != nil {
+	if r, corrections := c.refiner(); corrections && len(segs) > 1 && r != nil {
 		if rawAll := strings.Join(raws, " "); refine.HasCorrectionCue(rawAll) {
-			if merged, err := c.tryRefine(rawAll); err == nil {
+			if merged, err := c.tryRefine(r, rawAll); err == nil {
 				text = merged
 			} else {
 				c.report(fmt.Errorf("session: merge refine (keeping per-segment): %w", err))
@@ -255,10 +271,11 @@ func (c *Controller) notify(s State) {
 // refined runs the optional cleanup pass with a hard deadline. Fallback is
 // always the raw transcript — a refine failure costs polish, not the text.
 func (c *Controller) refined(text string) string {
-	if c.Refiner == nil {
+	r, _ := c.refiner()
+	if r == nil {
 		return text
 	}
-	cleaned, err := c.tryRefine(text)
+	cleaned, err := c.tryRefine(r, text)
 	if err != nil {
 		c.report(fmt.Errorf("session: refine (pasting raw): %w", err))
 		return text
@@ -268,7 +285,7 @@ func (c *Controller) refined(text string) string {
 
 // tryRefine runs one refine under the deadline and surfaces the error so
 // callers can pick their own fallback.
-func (c *Controller) tryRefine(text string) (string, error) {
+func (c *Controller) tryRefine(r refine.Refiner, text string) (string, error) {
 	timeout := c.RefineTimeout
 	if timeout <= 0 {
 		// Output length tracks input length (editor contract), so the

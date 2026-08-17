@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
@@ -33,6 +34,11 @@ func (l *loggingRefiner) Refine(ctx context.Context, text string) (string, error
 }
 
 func main() {
+	// -debug prints every raw and refined transcript. Dev tool only —
+	// default off, so normal runs never log what the user dictated.
+	debug := flag.Bool("debug", false, "log raw/refined transcripts to stdout")
+	flag.Parse()
+
 	fmt.Println("loading model....")
 	eng, err := engine.NewSherpa(engine.Config{
 		EncoderPath: "models/nemotron-en/encoder.int8.onnx",
@@ -66,19 +72,27 @@ func main() {
 	if mem, err := unix.SysctlUint64("hw.memsize"); err == nil && mem >= 16<<30 {
 		model, corrections = "models/qwen2.5-3b-instruct-q4_k_m.gguf", true
 	}
+	// Started in the background: the model load takes seconds and
+	// dictation doesn't need it to exist. The refiner attaches via
+	// SetRefiner when healthy; anything dictated before that pastes raw.
 	llm := refine.NewLlamaServer("third_party/llama/llama-server", model, 8181)
 	llm.Corrections = corrections
 	fmt.Printf("starting cleanup model (%s, corrections=%v)....\n", model, corrections)
-	if err := llm.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, "cleanup disabled:", err)
-	} else {
-		// Log raw vs refined so ASR errors and cleanup errors can't be
-		// confused: wrong words in RAW = the ASR misheard (mic, accent,
-		// dropped audio); wrong words only in REFINED = cleanup broke it.
-		ctl.Refiner = &loggingRefiner{inner: llm}
-		ctl.Corrections = corrections
-		defer llm.Stop()
-	}
+	go func() {
+		if err := llm.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "cleanup disabled:", err)
+			return
+		}
+		var r refine.Refiner = llm
+		if *debug {
+			// Log raw vs refined so ASR errors and cleanup errors can't be
+			// confused: wrong words in RAW = the ASR misheard (mic, accent,
+			// dropped audio); wrong words only in REFINED = cleanup broke it.
+			r = &loggingRefiner{inner: llm}
+		}
+		ctl.SetRefiner(r, corrections)
+		fmt.Println("cleanup model ready")
+	}()
 
 	// Hotkey loop moves off main: CGEventTaps run fine on any pinned thread
 	// with a run loop, but the menu bar cannot — macOS wants UI on the main
