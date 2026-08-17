@@ -1,10 +1,12 @@
 # big binary deps, see README for download steps
 third_party/sherpa/lib/
 third_party/llama/
-models/
+/models/
 
 # build artifacts
 whispr-go
+/build/Whispr.app/
+/build/*.zip
 *.tar.bz2
 
 .DS_Store

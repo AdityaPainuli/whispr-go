@@ -31,6 +31,12 @@ func SetState(s session.State) {
 	systray.SetTitle(iconFor(s))
 }
 
+// SetStatus shows arbitrary text in the menu bar — download progress,
+// startup errors. Any SetState afterwards replaces it.
+func SetStatus(text string) {
+	systray.SetTitle(text)
+}
+
 func iconFor(s session.State) string {
 	switch s {
 	case session.Listening:
