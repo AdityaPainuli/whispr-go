@@ -105,7 +105,7 @@ type LlamaServer struct {
 	binPath   string
 	modelPath string
 	port      int
-	mu        sync.Mutex    // guards cmd/exited: Start runs in a goroutine, Stop from quit
+	mu        sync.Mutex // guards cmd/exited: Start runs in a goroutine, Stop from quit
 	cmd       *exec.Cmd
 	exited    chan struct{} // closed when the subprocess is reaped
 	client    *http.Client

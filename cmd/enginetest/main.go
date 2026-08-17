@@ -3,9 +3,9 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/AdityaPainuli/whispr-go/internal/engine"
 	"os"
 	"time"
-	"github.com/AdityaPainuli/whispr-go/internal/engine"
 )
 
 const chunkSamples = 8960
