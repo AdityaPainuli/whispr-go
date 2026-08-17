@@ -154,6 +154,7 @@ func (l *LlamaServer) Start() error {
 	)
 	l.cmd.Stdout = os.Stderr
 	l.cmd.Stderr = os.Stderr
+	hideConsole(l.cmd)
 	l.mu.Lock()
 	if err := l.cmd.Start(); err != nil {
 		l.mu.Unlock()

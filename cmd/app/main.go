@@ -80,12 +80,25 @@ func bootstrap(debug bool) {
 	// cleanup-only prompt instead.
 	corrections := sysinfo.TotalRAM() >= 16<<30
 
-	// First run: fetch the models (~1.6GB) with progress in the menu bar.
+	// First run: fetch the models (~1.6GB) with progress in the tray AND
+	// on stdout — Windows shows no tray title, and a console that sits
+	// blank for a 10-minute download reads as a hung app.
 	// Later runs: everything present, this returns instantly.
 	dir := paths.ModelsDir()
-	if err := models.Ensure(dir, corrections, tray.SetStatus); err != nil {
+	lastPrint := ""
+	progress := func(msg string) {
+		tray.SetStatus(msg)
+		if msg != lastPrint {
+			fmt.Printf("\r%-40s", msg)
+			lastPrint = msg
+		}
+	}
+	if err := models.Ensure(dir, corrections, progress); err != nil {
 		fatal(err)
 		return
+	}
+	if lastPrint != "" {
+		fmt.Println()
 	}
 
 	tray.SetStatus("… loading")
