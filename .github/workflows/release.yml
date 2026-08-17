@@ -1,0 +1,122 @@
+# Tag v* → build all three OS packages → attach to a DRAFT release.
+# Publishing stays a human decision.
+#
+# Layouts (matching internal/paths):
+#   macOS:   Whispr.app (built by build/make-app.sh), zipped
+#   linux:   whispr + sherpa/*.so ($ORIGIN/sherpa rpath) + llama/
+#   windows: whispr.exe + sherpa DLLs next to the exe + llama/
+# Models are downloaded by the app on first run, never shipped.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  SHERPA_VERSION: v1.13.4
+  LLAMA_TAG: b10456
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - name: Fetch runtimes
+        run: |
+          set -euo pipefail
+          name="sherpa-onnx-${SHERPA_VERSION}-osx-universal2-shared"
+          curl -sL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${name}.tar.bz2"
+          tar xjf sherpa.tar.bz2
+          mkdir -p third_party/sherpa
+          cp -r "${name}/lib" third_party/sherpa/lib
+          cp -r "${name}/include" third_party/sherpa/include
+          curl -sL -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-macos-arm64.tar.gz"
+          tar xzf llama.tar.gz -C /tmp
+          server=$(find /tmp -name "llama-server" -type f | head -1)
+          mkdir -p third_party/llama
+          cp "$(dirname "$server")"/* third_party/llama/
+      - name: Build Whispr.app
+        run: |
+          ./build/make-app.sh "${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent build/Whispr.app "Whispr-${GITHUB_REF_NAME}-macos-arm64.zip"
+      - name: Upload
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "Whispr $GITHUB_REF_NAME" --notes "draft" || true
+          gh release upload "$GITHUB_REF_NAME" "Whispr-${GITHUB_REF_NAME}-macos-arm64.zip" --clobber
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - name: Fetch runtimes
+        run: |
+          set -euo pipefail
+          name="sherpa-onnx-${SHERPA_VERSION}-linux-x64-shared"
+          curl -sL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${name}.tar.bz2"
+          tar xjf sherpa.tar.bz2
+          mkdir -p third_party/sherpa
+          cp -r "${name}/lib" third_party/sherpa/lib
+          cp -r "${name}/include" third_party/sherpa/include
+          curl -sL -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+          mkdir /tmp/llama && tar xzf llama.tar.gz -C /tmp/llama
+      - name: Build + package
+        run: |
+          set -euo pipefail
+          go build -o whispr ./cmd/app
+          dist="Whispr-${GITHUB_REF_NAME}-linux-x64"
+          mkdir -p "$dist/sherpa" "$dist/llama"
+          cp whispr "$dist/"
+          cp third_party/sherpa/lib/*.so* "$dist/sherpa/"
+          server=$(find /tmp/llama -name "llama-server" -type f | head -1)
+          cp "$(dirname "$server")"/* "$dist/llama/"
+          tar czf "$dist.tar.gz" "$dist"
+      - name: Upload
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "Whispr $GITHUB_REF_NAME" --notes "draft" || true
+          gh release upload "$GITHUB_REF_NAME" "Whispr-${GITHUB_REF_NAME}-linux-x64.tar.gz" --clobber
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - name: Fetch runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="sherpa-onnx-${SHERPA_VERSION}-win-x64-shared-MD-Release"
+          curl -sL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${name}.tar.bz2"
+          tar xjf sherpa.tar.bz2
+          mkdir -p third_party/sherpa
+          cp -r "${name}/lib" third_party/sherpa/lib
+          cp -r "${name}/include" third_party/sherpa/include
+          curl -sL -o llama.zip "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-cpu-x64.zip"
+          mkdir /tmp/llama && cd /tmp/llama && unzip -q "$OLDPWD/llama.zip"
+      - name: Build + package
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -o whispr.exe ./cmd/app
+          dist="Whispr-${GITHUB_REF_NAME}-windows-x64"
+          mkdir -p "$dist/llama"
+          cp whispr.exe "$dist/"
+          cp third_party/sherpa/lib/*.dll "$dist/" || cp third_party/sherpa/lib/*/*.dll "$dist/"
+          server=$(find /tmp/llama -name "llama-server.exe" -type f | head -1)
+          cp "$(dirname "$server")"/* "$dist/llama/"
+          7z a -tzip "$dist.zip" "$dist" > /dev/null
+      - name: Upload
+        shell: bash
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "Whispr $GITHUB_REF_NAME" --notes "draft" || true
+          gh release upload "$GITHUB_REF_NAME" "Whispr-${GITHUB_REF_NAME}-windows-x64.zip" --clobber
