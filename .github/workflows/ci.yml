@@ -21,7 +21,7 @@ jobs:
           - os: ubuntu-latest
             sherpa: linux-x64-shared
           - os: windows-latest
-            sherpa: win-x64-shared
+            sherpa: win-x64-shared-MD-Release
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

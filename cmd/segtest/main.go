@@ -14,7 +14,7 @@ import (
 	"github.com/AdityaPainuli/whispr-go/internal/refine"
 	"github.com/AdityaPainuli/whispr-go/internal/session"
 
-	"golang.org/x/sys/unix"
+	"github.com/AdityaPainuli/whispr-go/internal/sysinfo"
 )
 
 type wavCapture struct {
@@ -66,7 +66,7 @@ func main() {
 
 	// same RAM gate as cmd/app: 3B + corrections needs 16GB
 	model, corrections := "models/qwen2.5-1.5b-instruct-q4_k_m.gguf", false
-	if mem, err := unix.SysctlUint64("hw.memsize"); err == nil && mem >= 16<<30 {
+	if sysinfo.TotalRAM() >= 16<<30 {
 		model, corrections = "models/qwen2.5-3b-instruct-q4_k_m.gguf", true
 	}
 	fmt.Printf("cleanup model: %s corrections=%v\n", model, corrections)
