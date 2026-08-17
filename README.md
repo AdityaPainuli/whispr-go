@@ -19,13 +19,42 @@ Streaming-native local models close that gap now. NVIDIA's Nemotron streaming tr
 
 On top of that sits a small local LLM that cleans up what you said, and it runs *while you're still talking*. More on that below.
 
-## Can I use it today?
+## Download
 
-Honest answer: only if you're comfortable with a terminal and Go. There's no downloadable app yet.
+Grab the latest build from [Releases](https://github.com/AdityaPainuli/whispr-go/releases). Free, no account, no subscription — it's your machine doing the work. First launch downloads the speech models (~1.6GB), progress shows in the tray/menu bar. After that everything is offline.
 
-That's the current milestone. The two issues that get us there are [#7 (.app bundle)](https://github.com/AdityaPainuli/whispr-go/issues/7) and [#8 (model downloader + first run)](https://github.com/AdityaPainuli/whispr-go/issues/8). When those close, this becomes: `brew install`, open it, grant two permissions, talk. Free, no account, no subscription — it's your machine doing the work.
+### macOS (Apple Silicon)
 
-If that's you, watch the repo. If you're fine with a terminal, jump to [Run it from source](#run-it-from-source).
+1. Download `Whispr-*-macos-arm64.zip` and unzip
+2. Move `Whispr.app` to Applications
+3. First open: **right-click → Open → Open**. macOS warns once because the app is unsigned (I'm not paying Apple $99/yr for a free tool)
+4. Grant **microphone** when prompted, and add Whispr under **System Settings → Privacy & Security → Accessibility** (needed for the hotkey and paste)
+5. Tap **Option** anywhere to start/stop dictating
+
+### Windows (x64)
+
+1. Download `Whispr-*-windows-x64.zip` and unzip anywhere
+2. Run `whispr.exe`. SmartScreen warns (unsigned): **More info → Run anyway**
+3. Tap **Alt** anywhere to start/stop dictating
+
+Known gap: the tray icon is blank for now — if `whispr.exe` is running, it's listening for the hotkey.
+
+### Linux (x64)
+
+1. Download and unpack `Whispr-*-linux-x64.tar.gz`
+2. One-time setup — the hotkey reads `/dev/input`, and paste uses the standard clipboard tools:
+
+```bash
+sudo usermod -aG input $USER    # then log out and back in
+sudo apt install xclip xdotool           # X11
+sudo apt install wl-clipboard wtype      # Wayland
+```
+
+3. Run `./whispr`, tap **Alt** anywhere to start/stop dictating
+
+Works on both X11 and Wayland — the hotkey doesn't go through the display server at all.
+
+Windows and Linux builds are new and lightly tested. If something misbehaves, [file an issue](https://github.com/AdityaPainuli/whispr-go/issues) with what you saw.
 
 ## How it works
 
