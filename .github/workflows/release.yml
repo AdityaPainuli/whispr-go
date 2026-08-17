@@ -36,8 +36,9 @@ jobs:
           cp -r "${name}/lib" third_party/sherpa/lib
           cp -r "${name}/include" third_party/sherpa/include
           curl -sL -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-macos-arm64.tar.gz"
-          tar xzf llama.tar.gz -C /tmp
-          server=$(find /tmp -name "llama-server" -type f | head -1)
+          mkdir -p /private/tmp/llama && tar xzf llama.tar.gz -C /private/tmp/llama
+          server=$(find /private/tmp/llama -name "llama-server" -type f | head -1)
+          test -n "$server" # fail loudly if the archive layout changed
           mkdir -p third_party/llama
           cp "$(dirname "$server")"/* third_party/llama/
       - name: Build Whispr.app
