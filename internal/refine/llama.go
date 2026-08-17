@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -103,6 +105,7 @@ type LlamaServer struct {
 	modelPath string
 	port      int
 	cmd       *exec.Cmd
+	exited    chan struct{} // closed when the subprocess is reaped
 	client    *http.Client
 
 	// Corrections switches to the self-correction prompt. Set before
@@ -130,6 +133,11 @@ func (l *LlamaServer) systemPrompt() string {
 // Start spawns the server and blocks until it answers health checks —
 // call at app launch next to the ASR prewarm, never on the hot path.
 func (l *LlamaServer) Start() error {
+	// A crash leaves the previous server alive, holding the port and 1GB+.
+	// Without this, the new server dies on the port bind and the health
+	// poll below gets a 200 from the orphan — possibly a stale model.
+	killStaleServer()
+
 	l.cmd = exec.Command(l.binPath,
 		"-m", l.modelPath,
 		"--port", fmt.Sprint(l.port),
@@ -147,10 +155,24 @@ func (l *LlamaServer) Start() error {
 	if err := l.cmd.Start(); err != nil {
 		return fmt.Errorf("refine: start llama-server: %w", err)
 	}
+	writePidFile(l.cmd.Process.Pid)
+
+	// Reap the process the moment it dies, so the health loop below can
+	// tell "still loading the model" from "exited on a port/model error"
+	// instead of happily polling whatever else answers on the port.
+	l.exited = make(chan struct{})
+	cmd := l.cmd
+	go func() { cmd.Wait(); close(l.exited) }()
 
 	// Model load takes a few seconds; poll health until ready.
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case <-l.exited:
+			l.cleanup()
+			return fmt.Errorf("refine: llama-server exited during startup (port in use, or bad model path?)")
+		default:
+		}
 		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/health", l.port))
 		if err == nil {
 			resp.Body.Close()
@@ -164,21 +186,79 @@ func (l *LlamaServer) Start() error {
 	return fmt.Errorf("refine: llama-server never became healthy")
 }
 
-// warmup pushes one tiny request through so the first real dictation
-// doesn't pay graph-compilation and cache-allocation costs.
+// warmup pushes tiny requests through so the first real dictation doesn't
+// pay graph-compilation and cache-allocation costs. Two concurrent, one
+// per --parallel slot: each slot has its own KV cache, and a single
+// warmup left slot 1 cold (~500ms extra on its first real refine).
 func (l *LlamaServer) warmup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := l.Refine(ctx, "warm up")
-	return err
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := l.Refine(ctx, "warm up")
+			errs <- err
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (l *LlamaServer) Stop() {
 	if l.cmd != nil && l.cmd.Process != nil {
 		l.cmd.Process.Kill()
-		l.cmd.Wait()
-		l.cmd = nil
+		if l.exited != nil {
+			<-l.exited // the Wait goroutine reaps it
+		}
 	}
+	l.cleanup()
+}
+
+func (l *LlamaServer) cleanup() {
+	l.cmd = nil
+	os.Remove(pidFilePath())
+}
+
+// pidFilePath is where the running server's pid is recorded, so the next
+// launch can clean up after a crash left the process orphaned.
+func pidFilePath() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "whispr-go")
+	os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "llama-server.pid")
+}
+
+func writePidFile(pid int) {
+	os.WriteFile(pidFilePath(), []byte(strconv.Itoa(pid)), 0o644)
+}
+
+// killStaleServer kills the llama-server a previous crashed run left
+// behind. Only ever kills a pid from our own pidfile, and only after
+// confirming it still is a llama-server — pids get recycled.
+func killStaleServer() {
+	data, err := os.ReadFile(pidFilePath())
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		os.Remove(pidFilePath())
+		return
+	}
+	out, _ := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if strings.Contains(string(out), "llama-server") {
+		if p, err := os.FindProcess(pid); err == nil {
+			p.Kill()
+		}
+	}
+	os.Remove(pidFilePath())
 }
 
 type chatRequest struct {
