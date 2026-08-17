@@ -14,66 +14,95 @@ Streaming-native local models close that gap now. NVIDIA's Nemotron streaming tr
 
 - RTF 0.39 on an M2, CPU only, 4 threads
 - ~240ms from stop-of-speech to final text
-- punctuation and capitalization come out of the model directly, no cleanup pass
-- under 1GB RAM, ~450MB model on disk
+- punctuation and capitalization come out of the model directly
+- under 1GB RAM for the ASR, ~450MB model on disk
 
-Target: under 300ms stop-to-paste, fully offline. That beats Wispr Flow's 1-3s round trip.
+On top of that sits a small local LLM that cleans up what you said, and it runs *while you're still talking*. More on that below.
+
+## Can I use it today?
+
+Honest answer: only if you're comfortable with a terminal and Go. There's no downloadable app yet.
+
+That's the current milestone. The two issues that get us there are [#7 (.app bundle)](https://github.com/AdityaPainuli/whispr-go/issues/7) and [#8 (model downloader + first run)](https://github.com/AdityaPainuli/whispr-go/issues/8). When those close, this becomes: `brew install`, open it, grant two permissions, talk. Free, no account, no subscription — it's your machine doing the work.
+
+If that's you, watch the repo. If you're fine with a terminal, jump to [Run it from source](#run-it-from-source).
 
 ## How it works
 
 ```
-mic (malgo/CoreAudio) → channel → feeder goroutine → sherpa-onnx (cgo) → paste at cursor
+mic (malgo/CoreAudio) → channel → feeder goroutine → sherpa-onnx (cgo) → cleanup LLM → paste at cursor
 ```
 
-No temp files, no IPC, no sidecar processes. Audio goes from the OS callback straight into the model's C API in-process. That's the whole trick.
+No temp files, no IPC for audio. Samples go from the OS callback straight into the model's C API in-process.
 
-- `internal/engine` — streaming ASR. Interface + sherpa-onnx cgo binding (Nemotron Speech Streaming EN 0.6b, int8)
-- `internal/audio` — mic capture at 16kHz mono via malgo, real-time-safe callback, buffered channel as shock absorber
-- `internal/session` — dictation state machine (Idle → Listening → Flushing), owns teardown ordering, unit-tested with fakes
+The cleanup pass is the interesting part. The ASR detects when you pause between sentences. Each finished sentence gets shipped to a local LLM (llama.cpp subprocess) for cleanup *while you speak the next one*. When you stop, only the last sentence still needs cleaning. The wait at the end stays constant no matter how long you talked. Same streaming-first trick as the ASR, applied to the LLM.
+
+Cleanup fixes punctuation, splits run-ons, strips filler words (um, uh, you know). On machines with 16GB+ RAM it also applies spoken self-corrections: "let's do the meeting at 4pm, no wait, make it 5" pastes as "Let's do the meeting at 5pm." That needs a 3B model, and a 3B resident on an 8GB machine starves the ASR (measured, badly), so 8GB machines get a smaller model and skip corrections. The app picks automatically at launch.
+
+If the cleanup model is missing or slow, the raw transcript pastes instead. Cleanup can improve a dictation, never delay or lose one.
+
+- `internal/engine` — streaming ASR + endpoint detection. sherpa-onnx cgo binding (Nemotron Speech Streaming EN 0.6b, int8)
+- `internal/audio` — mic capture at 16kHz mono via malgo, buffered channel as shock absorber
+- `internal/refine` — cleanup LLM behind an interface. llama.cpp server subprocess, prompt is the whole product
+- `internal/session` — dictation state machine, segment pipeline, teardown ordering. Unit-tested with fakes
 - `cmd/enginetest` — feeds a WAV through the engine, prints partials + flush timing
-- `cmd/mictest` — live dictation in the terminal, Enter to start/stop
+- `cmd/mictest` — live dictation in the terminal, no permissions needed
+- `cmd/segtest` — end-to-end harness: WAV through the real session + engine + LLM, no mic
+- `cmd/refinetest` — cleanup latency measurements
 
 ## Status
 
-- [x] Engine binding: streaming decode, partials, truncation-safe flush
+- [x] Streaming engine: decode while talking, partials, truncation-safe flush
 - [x] Mic capture
 - [x] Session state machine + tests
-- [x] Global hotkey: tap Option anywhere (CGEventTap, combos pass through untouched)
-- [x] Paste at cursor: clipboard + synthetic Cmd+V, old clipboard restored
+- [x] Global hotkey: tap Option anywhere
+- [x] Paste at cursor, old clipboard restored
 - [x] Menu bar app: 🎙 idle, 🔴 listening, ✍️ flushing
-- [x] Cleanup layer: pause-segmented LLM refine — sentences clean up while you're still talking, only the tail refines at stop
-- [x] Self-corrections ("no wait, make it 5pm" → "make it 5pm"): RAM-gated to 16GB+ machines — needs the 3B model (1.5B reverses corrections), and 3B resident on 8GB starves the ASR decoder
-- [ ] .app bundle + codesign
-- [ ] Model downloader, settings, Windows/Linux
+- [x] Cleanup layer: pause-segmented, runs during speech, tail-only wait at stop
+- [x] Self-corrections (16GB+ machines, RAM-gated automatically)
+- [ ] .app bundle, shipped free via Homebrew ([#7](https://github.com/AdityaPainuli/whispr-go/issues/7))
+- [ ] Model downloader + first-run walkthrough ([#8](https://github.com/AdityaPainuli/whispr-go/issues/8))
+- [ ] Settings / config file ([#3](https://github.com/AdityaPainuli/whispr-go/issues/3))
+- [ ] Windows/Linux ([#13](https://github.com/AdityaPainuli/whispr-go/issues/13))
 
-macOS (Apple Silicon) first. The core is platform-agnostic Go, platform adapters come later.
+All known gaps live in the [issues](https://github.com/AdityaPainuli/whispr-go/issues). macOS (Apple Silicon) first. The core is platform-agnostic Go, platform adapters come later.
 
-## Run it
+## Run it from source
 
-Needs Go 1.21+, macOS, and the model + sherpa-onnx runtime (not in the repo, ~500MB):
+Needs Go 1.21+, macOS on Apple Silicon, and ~2GB of downloads (ASR runtime + models, none of it in the repo).
 
 ```bash
-# runtime libs + headers
+# 1. sherpa-onnx runtime (ASR)
 curl -sL -o sherpa.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-osx-universal2-shared.tar.bz2
 tar xjf sherpa.tar.bz2
 mkdir -p third_party/sherpa
 cp -r sherpa-onnx-v1.13.4-osx-universal2-shared/lib third_party/sherpa/lib
 cp -r sherpa-onnx-v1.13.4-osx-universal2-shared/include third_party/sherpa/include
 
-# model
+# 2. ASR model (~450MB)
 curl -sL -o nemotron.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2
 tar xjf nemotron.tar.bz2
 mkdir -p models
 mv sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25 models/nemotron-en
 
-# macOS kills unsigned downloaded dylibs, re-sign them
-codesign --force -s - third_party/sherpa/lib/*.dylib
+# 3. llama.cpp server (cleanup LLM runtime)
+# grab the latest macos-arm64 build from https://github.com/ggml-org/llama.cpp/releases
+# copy llama-server and its .dylib files into third_party/llama/
+
+# 4. cleanup model (~1.1GB; every machine needs this one)
+curl -sL -o models/qwen2.5-1.5b-instruct-q4_k_m.gguf "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true"
+
+# 5. only if you have 16GB+ RAM: the corrections model (~2.1GB)
+curl -sL -o models/qwen2.5-3b-instruct-q4_k_m.gguf "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf?download=true"
+
+# 6. macOS kills unsigned downloaded dylibs, re-sign them
+codesign --force -s - third_party/sherpa/lib/*.dylib third_party/llama/*.dylib third_party/llama/llama-server
 
 # talk to it
 go run ./cmd/app
 ```
 
-Tap Option anywhere to start/stop. First run needs two grants for your terminal: microphone (auto-prompted) and Accessibility (System Settings → Privacy & Security → Accessibility) for the hotkey tap + paste. `cmd/mictest` still works for terminal-only testing without permissions.
+Tap Option anywhere to start/stop. First run needs two grants for your terminal: microphone (auto-prompted) and Accessibility (System Settings → Privacy & Security → Accessibility) for the hotkey tap + paste. `cmd/mictest` works terminal-only without permissions. Skipping steps 3-5 is fine too: the app warns and dictates raw ASR output, which already has punctuation.
 
 ## Tests
 
@@ -81,4 +110,4 @@ Tap Option anywhere to start/stop. First run needs two grants for your terminal:
 go test ./...
 ```
 
-Session tests run against fake engine/mic, no hardware needed.
+Session and refine tests run against fakes, no hardware or models needed. `go run ./cmd/segtest` runs the full pipeline (real models required) against a test WAV and prints per-segment cleanup timing.
