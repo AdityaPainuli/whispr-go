@@ -41,7 +41,8 @@ No temp files, no IPC, no sidecar processes. Audio goes from the OS callback str
 - [x] Global hotkey: tap Option anywhere (CGEventTap, combos pass through untouched)
 - [x] Paste at cursor: clipboard + synthetic Cmd+V, old clipboard restored
 - [x] Menu bar app: 🎙 idle, 🔴 listening, ✍️ flushing
-- [ ] Cleanup layer (punctuation/disfluencies) under the latency budget
+- [x] Cleanup layer: pause-segmented LLM refine — sentences clean up while you're still talking, only the tail refines at stop
+- [x] Self-corrections ("no wait, make it 5pm" → "make it 5pm"): RAM-gated to 16GB+ machines — needs the 3B model (1.5B reverses corrections), and 3B resident on 8GB starves the ASR decoder
 - [ ] .app bundle + codesign
 - [ ] Model downloader, settings, Windows/Linux
 

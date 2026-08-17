@@ -44,6 +44,16 @@ func NewSherpa(cfg Config) (Engine, error) {
 	c.feat_config.sample_rate = 16000
 	c.feat_config.feature_dim = 80
 
+	// Endpointing: the model tells us when the speaker paused, so the
+	// session can close a segment and refine it while they keep talking.
+	// rule2 is the one that matters for dictation (pause after speech);
+	// 1.2s is conservative — mid-sentence hesitations shouldn't split.
+	// rule3 force-splits run-ons so no segment outgrows the refine budget.
+	c.enable_endpoint = 1
+	c.rule1_min_trailing_silence = 2.4 // silence with no speech decoded yet
+	c.rule2_min_trailing_silence = 1.2 // pause after speech = segment boundary
+	c.rule3_min_utterance_length = 20  // seconds; force a boundary on run-ons
+
 	rec := C.SherpaOnnxCreateOnlineRecognizer(&c)
 	if rec == nil {
 		return nil, errors.New("sherpa: recognizer creation failed (check model paths)")
@@ -97,6 +107,14 @@ func (s *sherpaStream) Partial() (string, error) {
 	r := C.SherpaOnnxGetOnlineStreamResult(s.eng.rec, s.st)
 	defer C.SherpaOnnxDestroyOnlineRecognizerResult(r)
 	return C.GoString(r.text), nil
+}
+
+func (s *sherpaStream) IsEndpoint() bool {
+	return C.SherpaOnnxOnlineStreamIsEndpoint(s.eng.rec, s.st) == 1
+}
+
+func (s *sherpaStream) Reset() {
+	C.SherpaOnnxOnlineStreamReset(s.eng.rec, s.st)
 }
 
 func (s *sherpaStream) Flush() (string, error) {

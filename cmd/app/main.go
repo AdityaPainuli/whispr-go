@@ -12,6 +12,8 @@ import (
 	"whiper-go/internal/refine"
 	"whiper-go/internal/session"
 	"whiper-go/internal/tray"
+
+	"golang.org/x/sys/unix"
 )
 
 // loggingRefiner prints raw and refined text so failures can be located.
@@ -54,12 +56,19 @@ func main() {
 
 	// Cleanup LLM: optional by construction. Missing binary or model →
 	// warn and dictate raw, exactly as before this feature existed.
-	llm := refine.NewLlamaServer(
-		"third_party/llama/llama-server",
-		"models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-		8181,
-	)
-	fmt.Println("starting cleanup model....")
+	//
+	// Model is RAM-gated. Self-correction ("no wait, make it 5pm") needs
+	// the 3B — 1.5B reversed corrections half the time, 3B went 4/4. But
+	// 3B resident on an 8GB machine starves the ASR decoder (measured: a
+	// 24s dictation drained 2 minutes late under the memory pressure), so
+	// small machines get the 1.5B with the cleanup-only prompt instead.
+	model, corrections := "models/qwen2.5-1.5b-instruct-q4_k_m.gguf", false
+	if mem, err := unix.SysctlUint64("hw.memsize"); err == nil && mem >= 16<<30 {
+		model, corrections = "models/qwen2.5-3b-instruct-q4_k_m.gguf", true
+	}
+	llm := refine.NewLlamaServer("third_party/llama/llama-server", model, 8181)
+	llm.Corrections = corrections
+	fmt.Printf("starting cleanup model (%s, corrections=%v)....\n", model, corrections)
 	if err := llm.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "cleanup disabled:", err)
 	} else {
@@ -67,6 +76,7 @@ func main() {
 		// confused: wrong words in RAW = the ASR misheard (mic, accent,
 		// dropped audio); wrong words only in REFINED = cleanup broke it.
 		ctl.Refiner = &loggingRefiner{inner: llm}
+		ctl.Corrections = corrections
 		defer llm.Stop()
 	}
 
