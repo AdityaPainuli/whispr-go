@@ -1,0 +1,76 @@
+# Build + test on all three OSes. The point is the cross-platform seams:
+# the core must never silently grow a platform dependency (#13).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  SHERPA_VERSION: v1.13.4
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            sherpa: osx-universal2-shared
+          - os: ubuntu-latest
+            sherpa: linux-x64-shared
+          - os: windows-latest
+            sherpa: win-x64-shared
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Cache sherpa-onnx runtime
+        id: sherpa-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/sherpa
+          key: sherpa-${{ env.SHERPA_VERSION }}-${{ matrix.sherpa }}
+
+      - name: Download sherpa-onnx runtime
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="sherpa-onnx-${SHERPA_VERSION}-${{ matrix.sherpa }}"
+          curl -sL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${name}.tar.bz2"
+          tar xjf sherpa.tar.bz2
+          mkdir -p third_party/sherpa
+          cp -r "${name}/lib"     third_party/sherpa/lib
+          cp -r "${name}/include" third_party/sherpa/include
+          ls third_party/sherpa/lib
+
+      - name: Build
+        shell: bash
+        run: go build ./...
+
+      - name: Vet
+        shell: bash
+        # -unsafeptr=false: the windows clipboard/hook code converts
+        # syscall-returned uintptrs, which vet can't prove safe.
+        run: go vet -unsafeptr=false ./...
+
+      - name: Test
+        shell: bash
+        # The session test binary links libsherpa; point the loader at it.
+        run: |
+          export LD_LIBRARY_PATH="$PWD/third_party/sherpa/lib"
+          export PATH="$PWD/third_party/sherpa/lib:$PATH"
+          go test ./...
+
+      - name: gofmt
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "gofmt needed on:"; echo "$out"; exit 1; fi

@@ -2,7 +2,9 @@ package engine
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../third_party/sherpa/include
-#cgo LDFLAGS: -L${SRCDIR}/../../third_party/sherpa/lib -lsherpa-onnx-c-api -Wl,-rpath,${SRCDIR}/../../third_party/sherpa/lib
+#cgo LDFLAGS: -L${SRCDIR}/../../third_party/sherpa/lib -lsherpa-onnx-c-api
+#cgo darwin LDFLAGS: -Wl,-rpath,${SRCDIR}/../../third_party/sherpa/lib
+#cgo linux LDFLAGS: -Wl,-rpath,${SRCDIR}/../../third_party/sherpa/lib -Wl,-rpath,$ORIGIN/sherpa
 #include <stdlib.h>
 #include "sherpa-onnx/c-api/c-api.h"
 */

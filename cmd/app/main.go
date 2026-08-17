@@ -14,9 +14,8 @@ import (
 	"github.com/AdityaPainuli/whispr-go/internal/paths"
 	"github.com/AdityaPainuli/whispr-go/internal/refine"
 	"github.com/AdityaPainuli/whispr-go/internal/session"
+	"github.com/AdityaPainuli/whispr-go/internal/sysinfo"
 	"github.com/AdityaPainuli/whispr-go/internal/tray"
-
-	"golang.org/x/sys/unix"
 )
 
 // loggingRefiner prints raw and refined text so failures can be located.
@@ -79,10 +78,7 @@ func bootstrap(debug bool) {
 	// starves the ASR decoder (measured: a 24s dictation drained 2 minutes
 	// late under memory pressure), so small machines get the 1.5B with the
 	// cleanup-only prompt instead.
-	corrections := false
-	if mem, err := unix.SysctlUint64("hw.memsize"); err == nil && mem >= 16<<30 {
-		corrections = true
-	}
+	corrections := sysinfo.TotalRAM() >= 16<<30
 
 	// First run: fetch the models (~1.6GB) with progress in the menu bar.
 	// Later runs: everything present, this returns instantly.
