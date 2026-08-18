@@ -5,8 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/AdityaPainuli/whispr-go/internal/audio"
+	"github.com/AdityaPainuli/whispr-go/internal/config"
 	"github.com/AdityaPainuli/whispr-go/internal/engine"
 	"github.com/AdityaPainuli/whispr-go/internal/hotkey"
 	"github.com/AdityaPainuli/whispr-go/internal/models"
@@ -73,12 +77,29 @@ func fatal(err error) {
 }
 
 func bootstrap(debug bool) {
+	// User settings; the file is created with defaults on first run.
+	base, err := os.UserConfigDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	cfg, err := config.Load(config.Path(filepath.Join(base, "whispr-go")))
+	if err != nil {
+		fatal(err)
+		return
+	}
+
 	// Corrections need the 3B model — 1.5B reversed corrections half the
 	// time in testing, 3B went 4/4. But 3B resident on an 8GB machine
 	// starves the ASR decoder (measured: a 24s dictation drained 2 minutes
 	// late under memory pressure), so small machines get the 1.5B with the
-	// cleanup-only prompt instead.
+	// cleanup-only prompt instead. "corrections" in config.json overrides.
 	corrections := sysinfo.TotalRAM() >= 16<<30
+	switch cfg.Corrections {
+	case "on":
+		corrections = true
+	case "off":
+		corrections = false
+	}
 
 	// First run: fetch the models (~1.6GB) with progress in the tray AND
 	// on stdout — Windows shows no tray title, and a console that sits
@@ -93,7 +114,7 @@ func bootstrap(debug bool) {
 			lastPrint = msg
 		}
 	}
-	if err := models.Ensure(dir, corrections, progress); err != nil {
+	if err := models.Ensure(dir, cfg.Refine, corrections, progress); err != nil {
 		fatal(err)
 		return
 	}
@@ -102,13 +123,13 @@ func bootstrap(debug bool) {
 	}
 
 	tray.SetStatus("… loading")
-	var err error
 	eng, err = engine.NewSherpa(engine.Config{
-		EncoderPath: dir + "/nemotron-en/encoder.int8.onnx",
-		DecoderPath: dir + "/nemotron-en/decoder.int8.onnx",
-		JoinerPath:  dir + "/nemotron-en/joiner.int8.onnx",
-		TokensPath:  dir + "/nemotron-en/tokens.txt",
-		NumThreads:  4,
+		EncoderPath:  dir + "/nemotron-en/encoder.int8.onnx",
+		DecoderPath:  dir + "/nemotron-en/decoder.int8.onnx",
+		JoinerPath:   dir + "/nemotron-en/joiner.int8.onnx",
+		TokensPath:   dir + "/nemotron-en/tokens.txt",
+		NumThreads:   4,
+		Rule2Silence: cfg.PauseSeconds,
 	})
 	if err != nil {
 		fatal(err)
@@ -129,23 +150,75 @@ func bootstrap(debug bool) {
 	// the model load takes seconds and dictation doesn't need it to exist.
 	// The refiner attaches via SetRefiner when healthy; anything dictated
 	// before that pastes raw, exactly as before this feature existed.
-	llm = refine.NewLlamaServer(paths.LlamaServer(), dir+"/"+models.CleanupModel(corrections), 8181)
-	llm.Corrections = corrections
-	go func() {
-		if err := llm.Start(); err != nil {
-			fmt.Fprintln(os.Stderr, "cleanup disabled:", err)
-			return
+	//
+	// Idle unload (config: idle_unload_minutes): after that long without a
+	// dictation the server is stopped, releasing 1GB+ — VISION's "idle cost
+	// near zero". The next dictation start kicks off a reload; a dictation
+	// finishing before it's healthy pastes raw, which is the standing
+	// contract anyway. 0 disables and the server stays resident.
+	var startLLM func()
+	if cfg.Refine {
+		llm = refine.NewLlamaServer(paths.LlamaServer(), dir+"/"+models.CleanupModel(corrections), cfg.Port)
+		llm.Corrections = corrections
+
+		var llmMu sync.Mutex
+		running := false
+		startLLM = func() {
+			llmMu.Lock()
+			if running {
+				llmMu.Unlock()
+				return
+			}
+			running = true
+			llmMu.Unlock()
+			go func() {
+				if err := llm.Start(); err != nil {
+					fmt.Fprintln(os.Stderr, "cleanup disabled:", err)
+					llmMu.Lock()
+					running = false
+					llmMu.Unlock()
+					return
+				}
+				var r refine.Refiner = llm
+				if debug {
+					// Log raw vs refined so ASR errors and cleanup errors can't
+					// be confused: wrong words in RAW = the ASR misheard; wrong
+					// words only in REFINED = cleanup broke it.
+					r = &loggingRefiner{inner: llm}
+				}
+				ctl.SetRefiner(r, corrections)
+				fmt.Println("cleanup model ready")
+			}()
 		}
-		var r refine.Refiner = llm
-		if debug {
-			// Log raw vs refined so ASR errors and cleanup errors can't be
-			// confused: wrong words in RAW = the ASR misheard (mic, accent,
-			// dropped audio); wrong words only in REFINED = cleanup broke it.
-			r = &loggingRefiner{inner: llm}
+		stopLLM := func() {
+			llmMu.Lock()
+			wasRunning := running
+			running = false
+			llmMu.Unlock()
+			if wasRunning {
+				ctl.SetRefiner(nil, false)
+				llm.Stop()
+				fmt.Println("cleanup model unloaded (idle)")
+			}
 		}
-		ctl.SetRefiner(r, corrections)
-		fmt.Println("cleanup model ready")
-	}()
+		startLLM()
+
+		if cfg.IdleUnloadMinutes > 0 {
+			idle := time.Duration(cfg.IdleUnloadMinutes) * time.Minute
+			timer := time.AfterFunc(idle, stopLLM)
+			prev := ctl.OnState
+			ctl.OnState = func(s session.State) {
+				prev(s)
+				switch s {
+				case session.Listening:
+					timer.Stop()
+					startLLM() // reload if the idle timer unloaded it
+				case session.Idle:
+					timer.Reset(idle)
+				}
+			}
+		}
+	}
 
 	// CGEventTaps run fine on any pinned thread with a run loop; the menu
 	// bar already owns main, so the hotkey gets its own goroutine.

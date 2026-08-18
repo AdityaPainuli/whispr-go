@@ -51,10 +51,14 @@ func NewSherpa(cfg Config) (Engine, error) {
 	// rule2 is the one that matters for dictation (pause after speech);
 	// 1.2s is conservative — mid-sentence hesitations shouldn't split.
 	// rule3 force-splits run-ons so no segment outgrows the refine budget.
+	rule2 := cfg.Rule2Silence
+	if rule2 == 0 {
+		rule2 = 1.2
+	}
 	c.enable_endpoint = 1
-	c.rule1_min_trailing_silence = 2.4 // silence with no speech decoded yet
-	c.rule2_min_trailing_silence = 1.2 // pause after speech = segment boundary
-	c.rule3_min_utterance_length = 20  // seconds; force a boundary on run-ons
+	c.rule1_min_trailing_silence = 2.4            // silence with no speech decoded yet
+	c.rule2_min_trailing_silence = C.float(rule2) // pause after speech = segment boundary
+	c.rule3_min_utterance_length = 20             // seconds; force a boundary on run-ons
 
 	rec := C.SherpaOnnxCreateOnlineRecognizer(&c)
 	if rec == nil {

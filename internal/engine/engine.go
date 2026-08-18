@@ -9,6 +9,9 @@ type Config struct {
 	JoinerPath  string
 	TokensPath  string
 	NumThreads  int
+	// Rule2Silence: seconds of post-speech silence that closes a segment
+	// (endpoint detection). 0 means the 1.2s default.
+	Rule2Silence float64
 }
 
 // Engine is created once at app start (model load ~2.2 s = prewarm)

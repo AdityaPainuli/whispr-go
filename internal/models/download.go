@@ -7,6 +7,8 @@ package models
 import (
 	"archive/tar"
 	"compress/bzip2"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +24,11 @@ const (
 
 	qwen15URL = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true"
 	qwen3URL  = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf?download=true"
+
+	// sha256 of the ggufs, matching HuggingFace's published LFS hashes.
+	// A truncated or tampered download must never be loaded as a model.
+	qwen15SHA = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+	qwen3SHA  = "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d"
 )
 
 // ASRPresent reports whether the ASR model files exist under dir.
@@ -44,20 +51,24 @@ func CleanupModel(corrections bool) string {
 
 // Ensure downloads whatever is missing from dir. progress receives short
 // human-readable status lines ("ASR model 42%") — safe to show in a menu
-// bar title. Blocking; call from a goroutine.
-func Ensure(dir string, corrections bool, progress func(string)) error {
+// bar title. Blocking; call from a goroutine. cleanup=false skips the
+// LLM download entirely (refine disabled in config: raw ASR only).
+func Ensure(dir string, cleanup, corrections bool, progress func(string)) error {
 	if !ASRPresent(dir) {
 		if err := fetchASR(dir, progress); err != nil {
 			return fmt.Errorf("models: ASR download: %w", err)
 		}
 	}
+	if !cleanup {
+		return nil
+	}
 	gguf := CleanupModel(corrections)
 	if _, err := os.Stat(filepath.Join(dir, gguf)); err != nil {
-		url := qwen15URL
+		url, sha := qwen15URL, qwen15SHA
 		if corrections {
-			url = qwen3URL
+			url, sha = qwen3URL, qwen3SHA
 		}
-		if err := fetchFile(url, filepath.Join(dir, gguf), "cleanup model", progress); err != nil {
+		if err := fetchFile(url, sha, filepath.Join(dir, gguf), "cleanup model", progress); err != nil {
 			return fmt.Errorf("models: cleanup download: %w", err)
 		}
 	}
@@ -117,9 +128,10 @@ func fetchASR(dir string, progress func(string)) error {
 	return os.Rename(tmpRoot, filepath.Join(dir, "nemotron-en"))
 }
 
-// fetchFile downloads url to dest via a .partial rename, so an
-// interrupted download never masquerades as a complete model.
-func fetchFile(url, dest, label string, progress func(string)) error {
+// fetchFile downloads url to dest via a .partial rename, hashing in
+// flight — an interrupted, truncated, or tampered download never
+// masquerades as a complete model.
+func fetchFile(url, wantSHA, dest, label string, progress func(string)) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -136,12 +148,17 @@ func fetchFile(url, dest, label string, progress func(string)) error {
 	}
 	counted := &countingReader{r: resp.Body, total: resp.ContentLength,
 		report: func(pct int) { progress(fmt.Sprintf("%s %d%%", label, pct)) }}
-	if _, err := io.Copy(f, counted); err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, h), counted); err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return err
 	}
 	f.Close()
+	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA {
+		os.Remove(tmp)
+		return fmt.Errorf("%s checksum mismatch: got %s want %s", label, got, wantSHA)
+	}
 	return os.Rename(tmp, dest)
 }
 
