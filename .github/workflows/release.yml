@@ -51,6 +51,46 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --draft --title "Whispr $GITHUB_REF_NAME" --notes "draft" || true
           gh release upload "$GITHUB_REF_NAME" "Whispr-${GITHUB_REF_NAME}-macos-arm64.zip" --clobber
 
+  # Intel macs: cross-compiled on the arm64 runner. The sherpa universal2
+  # dylibs already carry the x86_64 slice; only the Go binary and the
+  # llama runtime differ. Note: llama.cpp's macos-x64 build is CPU-only
+  # (no Metal), so cleanup is slower than on Apple Silicon.
+  macos-intel:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - name: Fetch runtimes
+        run: |
+          set -euo pipefail
+          name="sherpa-onnx-${SHERPA_VERSION}-osx-universal2-shared"
+          curl -sL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${name}.tar.bz2"
+          tar xjf sherpa.tar.bz2
+          mkdir -p third_party/sherpa
+          cp -r "${name}/lib" third_party/sherpa/lib
+          cp -r "${name}/include" third_party/sherpa/include
+          curl -sL -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-macos-x64.tar.gz"
+          mkdir -p /private/tmp/llama && tar xzf llama.tar.gz -C /private/tmp/llama
+          server=$(find /private/tmp/llama -name "llama-server" -type f | head -1)
+          test -n "$server" # fail loudly if the archive layout changed
+          mkdir -p third_party/llama
+          cp "$(dirname "$server")"/* third_party/llama/
+      - name: Build Whispr.app (x86_64)
+        env:
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+          CC: clang -arch x86_64
+        run: |
+          ./build/make-app.sh "${GITHUB_REF_NAME#v}"
+          lipo -archs build/Whispr.app/Contents/MacOS/whispr | grep -q x86_64
+          ditto -c -k --keepParent build/Whispr.app "Whispr-${GITHUB_REF_NAME}-macos-intel.zip"
+      - name: Upload
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "Whispr $GITHUB_REF_NAME" --notes "draft" || true
+          gh release upload "$GITHUB_REF_NAME" "Whispr-${GITHUB_REF_NAME}-macos-intel.zip" --clobber
+
   linux:
     runs-on: ubuntu-latest
     steps:
