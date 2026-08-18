@@ -23,9 +23,9 @@ On top of that sits a small local LLM that cleans up what you said, and it runs 
 
 Grab the latest build from [Releases](https://github.com/AdityaPainuli/whispr-go/releases). Free, no account, no subscription — it's your machine doing the work. First launch downloads the speech models (~1.6GB), progress shows in the tray/menu bar. After that everything is offline.
 
-### macOS (Apple Silicon)
+### macOS
 
-1. Download `Whispr-*-macos-arm64.zip` and unzip
+1. Download `Whispr-*-macos-arm64.zip` (Apple Silicon, M1 and later) or `Whispr-*-macos-intel.zip` (Intel Macs) and unzip
 2. Move `Whispr.app` to Applications
 3. First open: **right-click → Open → Open**. macOS warns once because the app is unsigned (I'm not paying Apple $99/yr for a free tool)
 4. Grant **microphone** when prompted, and add Whispr under **System Settings → Privacy & Security → Accessibility** (needed for the hotkey and paste)
