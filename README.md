@@ -35,9 +35,8 @@ Grab the latest build from [Releases](https://github.com/AdityaPainuli/whispr-go
 
 1. Download `Whispr-*-windows-x64.zip` and unzip anywhere
 2. Run `whispr.exe`. SmartScreen warns (unsigned): **More info → Run anyway**
-3. Tap **Alt** anywhere to start/stop dictating
-
-Known gap: the tray icon is blank for now — if `whispr.exe` is running, it's listening for the hotkey.
+3. Watch the console: model download progress, then "ready". A gray mic icon appears in the tray (red dot while recording)
+4. Tap **Alt** anywhere to start/stop dictating
 
 ### Linux (x64)
 
